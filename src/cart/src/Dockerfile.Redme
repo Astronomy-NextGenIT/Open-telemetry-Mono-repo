@@ -1,0 +1,548 @@
+# Dockerfile Explanation – Cart Service (.NET)
+
+## What is this Dockerfile?
+
+This Dockerfile is used to build and run the Cart Service of the OpenTelemetry Demo application.
+
+The Cart Service is developed in .NET and uses a Multi-Stage Build approach.
+
+The Dockerfile performs the following tasks:
+
+1. Copies source code.
+2. Restores dependencies.
+3. Publishes the application.
+4. Creates a lightweight runtime image.
+5. Runs the Cart service.
+
+---
+
+# Understanding the Multi-Stage Build
+
+This Dockerfile contains two stages:
+
+### Stage 1 – Builder
+
+Used for:
+
+* Restoring packages
+* Compiling code
+* Publishing application
+
+### Stage 2 – Runtime
+
+Used for:
+
+* Running the application
+
+### Why use Multi-Stage Builds?
+
+Without Multi-Stage Builds:
+
+```text
+Docker Image
+ ├── Source Code
+ ├── SDK
+ ├── Build Tools
+ ├── Temporary Files
+ └── Application
+```
+
+Large image size.
+
+With Multi-Stage Builds:
+
+```text
+Docker Image
+ └── Application Only
+```
+
+# Step 1: Use .NET SDK Image
+
+```dockerfile
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS builder
+```
+
+## What it does
+
+Downloads the .NET 10 SDK image.
+
+The SDK image contains:
+
+* C# compiler
+* NuGet package manager
+* Build tools
+* Publish tools
+
+## Why it is needed
+
+The application must be compiled before it can run.
+
+---
+
+# Step 2: Define Target Architecture
+
+```dockerfile
+ARG TARGETARCH
+```
+
+## What it does
+
+Creates a variable called TARGETARCH.
+
+Examples:
+
+```text
+amd64
+arm64
+```
+
+## Why it is needed
+
+Allows the same Dockerfile to build images for different CPU architectures.
+
+Example:
+
+```text
+Intel Server  → amd64
+AWS Graviton → arm64
+```
+
+---
+
+# Step 3: Set Working Directory
+
+```dockerfile
+WORKDIR /usr/src/app/
+```
+
+## What it does
+
+Creates and moves into:
+
+```text
+/usr/src/app
+```
+
+inside the container.
+
+All upcoming commands run from this directory.
+
+---
+
+# Step 4: Copy Cart Source Code
+
+```dockerfile
+COPY ./src/cart/ ./
+```
+
+## What it does
+
+Copies the complete Cart service source code into the container.
+
+Before:
+
+```text
+Container
+└── /usr/src/app
+```
+
+After:
+
+```text
+Container
+└── /usr/src/app
+      ├── Program.cs
+      ├── cart.csproj
+      └── Other Source Files
+```
+
+---
+
+# Step 5: Copy Protobuf Files
+
+```dockerfile
+COPY ./pb/ ./pb/
+```
+
+## What it does
+
+Copies all protobuf files.
+
+## What are protobuf files?
+
+Protocol Buffers (.proto files) define the structure of messages exchanged between services.
+
+Example:
+
+```text
+Cart Service
+     ↓
+Product Service
+     ↓
+Checkout Service
+```
+
+All services understand the same message format because of protobuf definitions.
+
+---
+
+# Step 6: Restore Dependencies
+
+```dockerfile
+RUN dotnet restore ./src/cart.csproj -r linux-musl-$TARGETARCH
+```
+
+## What it does
+
+Downloads all required NuGet packages.
+
+Similar to:
+
+```bash
+dotnet restore
+```
+
+on your local machine.
+
+---
+
+## What is linux-musl?
+
+The application is being prepared for Alpine Linux.
+
+There are two common Linux C libraries:
+
+### glibc
+
+Used by:
+
+```text
+Ubuntu
+Debian
+RHEL
+Amazon Linux
+```
+
+### musl
+
+Used by:
+
+```text
+Alpine Linux
+```
+
+Because the runtime image uses Alpine Linux later, the application is compiled for:
+
+```text
+linux-musl-amd64
+or
+linux-musl-arm64
+```
+
+---
+
+# Step 7: Publish the Application
+
+```dockerfile
+RUN dotnet publish ./src/cart.csproj -r linux-musl-$TARGETARCH --no-restore -o /cart
+```
+
+## What it does
+
+Creates production-ready output.
+
+### Parameters
+
+| Parameter    | Meaning                                  |
+| ------------ | ---------------------------------------- |
+| -r           | Runtime                                  |
+| --no-restore | Skip restore because it was already done |
+| -o           | Output folder                            |
+
+---
+
+## Why Publish?
+
+Publish performs:
+
+```text
+Source Code
+     ↓
+Compile
+     ↓
+Package Dependencies
+     ↓
+Generate Runtime Files
+     ↓
+Ready-to-Run Application
+```
+
+Output is stored in:
+
+```text
+/cart
+```
+
+---
+
+# Runtime Stage
+
+The build stage is complete.
+
+Now Docker creates a smaller image only for running the application.
+
+---
+
+# Step 8: Use Lightweight Runtime Image
+
+```dockerfile
+FROM mcr.microsoft.com/dotnet/runtime-deps:10.0-alpine3.22
+```
+
+## What it does
+
+Uses a very small Alpine Linux image.
+
+Notice:
+
+```text
+runtime-deps
+```
+
+not
+
+```text
+sdk
+```
+
+This image contains:
+
+* Required OS libraries
+* Runtime dependencies
+
+It does NOT contain:
+
+* Compiler
+* Build tools
+* SDK
+
+---
+
+## Why Alpine Linux?
+
+Benefits:
+
+### Smaller Image
+
+Typical sizes:
+
+```text
+SDK Image      : ~800 MB+
+Runtime Image  : ~200 MB+
+Alpine Runtime : Much Smaller
+```
+
+### Faster Deployment
+
+Smaller images download faster.
+
+### Better Security
+
+Fewer packages mean fewer vulnerabilities.
+
+---
+
+# Step 9: Set Runtime Working Directory
+
+```dockerfile
+WORKDIR /usr/src/app/
+```
+
+## What it does
+
+Creates the application folder in the runtime container.
+
+---
+
+# Step 10: Copy Published Application
+
+```dockerfile
+COPY --from=builder /cart/ ./
+```
+
+## What it does
+
+Copies published files from the builder stage.
+
+Result:
+
+```text
+/usr/src/app
+     ├── cart
+     ├── config files
+     ├── dlls
+     └── dependencies
+```
+
+---
+
+# Step 11: Configure .NET Runtime
+
+```dockerfile
+ENV DOTNET_HOSTBUILDER__RELOADCONFIGONCHANGE=false
+```
+
+## What it does
+
+Disables automatic configuration file reloading.
+
+---
+
+## What is Configuration Reload?
+
+Normally:
+
+```text
+appsettings.json changes
+         ↓
+Application reloads configuration
+```
+
+Inside containers this is usually unnecessary.
+
+---
+
+## Why Disable It?
+
+Benefits:
+
+* Lower CPU usage
+* Lower memory usage
+* Better performance
+* Fewer file-system watchers
+
+This is a common optimization in Kubernetes and Docker environments.
+
+---
+
+# Step 12: Expose Port
+
+```dockerfile
+EXPOSE ${CART_PORT}
+```
+
+## What it does
+
+Documents which port the Cart Service uses.
+
+Example:
+
+```text
+CART_PORT=7070
+```
+
+This allows:
+
+* Kubernetes Services
+* Docker Networking
+* Other Microservices
+
+to connect to the Cart Service.
+
+---
+
+# Step 13: Start the Application
+
+```dockerfile
+ENTRYPOINT [ "./cart" ]
+```
+
+## What it does
+
+Starts the Cart Service executable.
+
+Unlike Accounting Service:
+
+```text
+Accounting.dll
+```
+
+which requires:
+
+```bash
+dotnet Accounting.dll
+```
+
+the Cart Service starts directly as:
+
+```bash
+./cart
+```
+
+because it was published as a native executable.
+
+---
+
+# Complete Execution Flow
+
+```text
+Docker Build Starts
+        ↓
+Copy Source Code
+        ↓
+Copy Proto Files
+        ↓
+Restore NuGet Packages
+        ↓
+Publish Application
+        ↓
+Create Lightweight Alpine Image
+        ↓
+Copy Published Files
+        ↓
+Configure .NET Runtime
+        ↓
+Expose Cart Port
+        ↓
+Start Cart Service
+```
+
+# Key Learning Points
+
+### Multi-Stage Build
+
+Used to reduce image size.
+
+### Alpine Linux
+
+Provides a lightweight runtime environment.
+
+### dotnet restore
+
+Downloads project dependencies.
+
+### dotnet publish
+
+Creates production-ready application files.
+
+### linux-musl
+
+Builds the application specifically for Alpine Linux.
+
+### ENTRYPOINT
+
+Defines the command executed when the container starts.
+
+### EXPOSE
+
+Documents the port used by the Cart Service.
+
+# Summary
+
+This Dockerfile builds the Cart Service using .NET SDK, publishes it for Alpine Linux, and runs it in a lightweight runtime container. The design focuses on:
+
+* Small image size
+* Fast startup
+* Better security
+* Lower resource consumption
+* Production-ready deployment in Docker and Kubernetes
