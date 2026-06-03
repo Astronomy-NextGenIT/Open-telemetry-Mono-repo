@@ -9,7 +9,7 @@ import com.google.protobuf.gradle.*
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
 
 plugins {
-    kotlin("jvm") version "2.3.21"
+    kotlin("jvm") version "2.4.0"
     application
     id("java")
     id("idea")
@@ -49,7 +49,7 @@ dependencies {
     implementation("org.slf4j:slf4j-api:2.0.18")
     implementation("com.google.protobuf:protobuf-kotlin:${protobufVersion}")
     implementation("dev.openfeature:sdk:1.20.2")
-    implementation("dev.openfeature.contrib.providers:flagd:0.13.3")
+    implementation("dev.openfeature.contrib.providers:flagd:0.14.0")
 
     if (JavaVersion.current().isJava9Compatible) {
         // Workaround for @javax.annotation.Generated
