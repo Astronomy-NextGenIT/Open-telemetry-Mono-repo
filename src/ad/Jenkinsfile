@@ -1,0 +1,127 @@
+pipeline {
+    agent any
+
+    environment {
+
+        AWS_REGION = "ap-south-1"
+        AWS_ACCOUNT_ID = "004058506543"
+
+        ECR_REPO = "open-telemetry-registry"
+
+        IMAGE_NAME = "ad"
+
+        IMAGE_TAG = "${BUILD_NUMBER}"
+
+        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+
+        K8S_DEPLOYMENT = "opentelemetry-demo-adservice"
+        NAMESPACE = "default"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+            }
+        }
+
+        stage('Verify Tools') {
+            steps {
+                sh '''
+                aws --version
+                kubectl version --client
+                docker --version
+                '''
+            }
+        }
+
+        stage('ECR Login') {
+            steps {
+                sh '''
+                aws ecr get-login-password \
+                --region ${AWS_REGION} | \
+                docker login \
+                --username AWS \
+                --password-stdin \
+                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+        steps {
+        sh '''
+        docker build \
+        --build-arg OTEL_JAVA_AGENT_VERSION=2.16.0 \
+        -t ${IMAGE_NAME}:${IMAGE_TAG} \
+        -f src/ad/Dockerfile .
+        '''
+            }
+        }
+
+        stage('Tag Image') {
+            steps {
+                sh '''
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${ECR_URI}:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('Push Image To ECR') {
+            steps {
+                sh '''
+                docker push ${ECR_URI}:${IMAGE_TAG}
+                '''
+            }
+        }
+
+        stage('Update Manifest') {
+            steps {
+                sh '''
+                sed -i "s|image:.*|image: ${ECR_URI}:${IMAGE_TAG}|g" \
+                src/ad/kubernetes/ad/deploy.yaml
+
+                cat src/ad/kubernetes/ad/deploy.yaml | grep image
+                '''
+            }
+        }
+
+        stage('Deploy To Kubernetes') {
+            steps {
+                sh '''
+                kubectl apply -f src/ad/kubernetes/ad/deploy.yaml
+                kubectl apply -f src/ad/kubernetes/ad/svc.yaml
+                '''
+            }
+        }
+
+        stage('Rollout Status') {
+            steps {
+                sh '''
+                kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${NAMESPACE}
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo 'Ad Service Deployment Successful'
+        }
+
+        failure {
+            echo 'Pipeline Failed'
+        }
+
+        always {
+            sh '''
+            docker image prune -f || true
+            '''
+        }
+    }
+}
