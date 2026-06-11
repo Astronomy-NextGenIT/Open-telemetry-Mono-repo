@@ -51,6 +51,8 @@ spec:
               value: 'opentelemetry-demo-valkey:6379'
             - name: CHECKOUT_PORT
               value: "8080"
+            - name: SHIPPING_ADDR
+              value: 'opentelemetry-demo-shippingservice:8080'
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://$(OTEL_COLLECTOR_NAME):4317
             - name: VERSION
