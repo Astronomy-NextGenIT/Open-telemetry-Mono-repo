@@ -86,7 +86,7 @@ pipeline {
     environment {
 
         AWS_REGION = "ap-south-1"
-        AWS_ACCOUNT_ID = "004058506543"
+        AWS_ACCOUNT_ID = "0040585065890"
 
         ECR_REPO = "open-telemetry-registry"
 
@@ -217,7 +217,7 @@ pipeline {
 | Variable       | Value                          |
 | -------------- | ------------------------------ |
 | AWS_REGION     | ap-south-1                     |
-| AWS_ACCOUNT_ID | <AWS-ACCOUNT-ID>                   |
+| AWS_ACCOUNT_ID | 0040585065890                  |
 | ECR_REPO       | open-telemetry-registry        |
 | IMAGE_NAME     | cart                           |
 | IMAGE_TAG      | BUILD_NUMBER                   |
