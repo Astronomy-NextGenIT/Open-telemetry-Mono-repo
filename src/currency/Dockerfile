@@ -53,6 +53,8 @@ FROM base AS release
 
 COPY --from=builder /usr/local /usr/local
 
-EXPOSE ${CURRENCY_PORT}
+ENV CURRENCY_PORT=8080
 
-ENTRYPOINT ["sh", "-c", "./usr/local/bin/currency ${CURRENCY_PORT}"]
+EXPOSE 8080
+
+ENTRYPOINT ["/usr/local/bin/currency","8080"]
