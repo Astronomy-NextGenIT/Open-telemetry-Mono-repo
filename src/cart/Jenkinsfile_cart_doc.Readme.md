@@ -1,4 +1,4 @@
-# Cart Service CI/CD Pipeline Using Amazon ECR Public and Kubernetes
+# Cart Service CI/CD Pipeline Documentation
 
 ## Overview
 
