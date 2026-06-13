@@ -1,0 +1,129 @@
+pipeline {
+    agent any
+
+    environment {
+
+        AWS_REGION = "us-east-1"
+
+        PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
+
+        IMAGE_NAME = "frauddetectionservice"
+        IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
+
+        OTEL_JAVA_AGENT_VERSION = "2.25.0"
+
+        K8S_DEPLOYMENT = "opentelemetry-demo-frauddetectionservice"
+        NAMESPACE = "default"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+            }
+        }
+
+        stage('Verify Tools') {
+            steps {
+                sh '''
+                aws --version
+                kubectl version --client
+                docker --version
+                '''
+            }
+        }
+
+        stage('Login Public ECR') {
+            steps {
+                sh '''
+                aws ecr-public get-login-password \
+                --region ${AWS_REGION} | \
+                docker login \
+                --username AWS \
+                --password-stdin public.ecr.aws
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                docker build \
+                --build-arg OTEL_JAVA_AGENT_VERSION=${OTEL_JAVA_AGENT_VERSION} \
+                -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                -f src/fraud-detection/Dockerfile .
+                '''
+            }
+        }
+
+        stage('Tag Image') {
+            steps {
+                sh '''
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Push Image To Public ECR') {
+            steps {
+                sh '''
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Update Deployment Image') {
+            steps {
+                sh '''
+                kubectl set image \
+                deployment/${K8S_DEPLOYMENT} \
+                frauddetectionservice=${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+                echo "Deployment updated to:"
+                kubectl get deployment ${K8S_DEPLOYMENT} \
+                -o=jsonpath='{.spec.template.spec.containers[0].image}'
+
+                echo
+                '''
+            }
+        }
+
+        stage('Rollout Status') {
+            steps {
+                sh '''
+                kubectl rollout status \
+                deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Fraud Detection Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
+        }
+
+        failure {
+            echo "Pipeline Failed"
+        }
+
+        always {
+            sh '''
+            docker image prune -af || true
+            '''
+        }
+    }
+}
