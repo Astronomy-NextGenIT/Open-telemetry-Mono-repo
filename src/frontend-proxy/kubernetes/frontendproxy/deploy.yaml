@@ -49,6 +49,26 @@ spec:
               value: cumulative
             - name: ENVOY_PORT
               value: "8080"
+            - name: ENVOY_ADDR
+              value: "0.0.0.0"
+            - name: ENVOY_ADMIN_PORT
+              value: "8081"
+            - name: GRAFANA_HOST
+              value: 'opentelemetry-demo-frontend'
+            - name: GRAFANA_PORT
+              value: "8080"
+            - name: JAEGER_HOST
+              value: 'opentelemetry-demo-frontend'
+            - name: JAEGER_UI_PORT
+              value: "8080"
+            - name: TELEMETRY_DOCS_HOST
+              value: 'opentelemetry-demo-frontend'
+            - name: TELEMETRY_DOCS_PORT
+              value: "8080"
+            - name: FIREPIT_HOST
+              value: 'opentelemetry-demo-frontend'
+            - name: FIREPIT_PORT
+              value: "8080"
             - name: FLAGD_HOST
               value: 'opentelemetry-demo-flagd'
             - name: FLAGD_PORT
