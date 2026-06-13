@@ -1,83 +1,46 @@
-# Jenkins CI/CD Pipeline Documentation for Cart Service Deployment
+# Cart Service CI/CD Pipeline Using Amazon ECR Public and Kubernetes
 
-## 1. Purpose
+## Overview
 
-This document describes the complete CI/CD pipeline implementation for the Cart Service component of the OpenTelemetry Demo application.
+This Jenkins pipeline automates the complete build, containerization, image publishing, and deployment process for the Cart Service application. The pipeline retrieves the source code from GitHub, builds a Docker image, publishes the image to Amazon ECR Public, updates the Kubernetes deployment manifest with the newly generated image tag, deploys the application to the Kubernetes cluster, and verifies successful rollout.
 
-The pipeline automates the following activities:
-
-1. Fetch source code from Git repository.
-2. Build a Docker image for Cart Service.
-3. Authenticate with Amazon Elastic Container Registry (ECR).
-4. Push the Docker image to ECR.
-5. Update Kubernetes deployment manifests with the new image.
-6. Deploy the updated application to Kubernetes.
-7. Verify successful rollout.
-8. Perform post-build cleanup.
+The pipeline ensures that every build generates a uniquely tagged container image, enabling version tracking, rollback capability, and consistent deployment across environments.
 
 ---
 
-# 2. Architecture Overview
+# Pipeline Configuration
 
-Developer Code Commit
+## Environment Variables
 
-↓
+The pipeline uses the following environment variables:
 
-Git Repository
+| Variable       | Description                                               |
+| -------------- | --------------------------------------------------------- |
+| AWS_REGION     | AWS region used for Amazon ECR Public authentication      |
+| PUBLIC_ECR_URI | URI of the Amazon ECR Public repository                   |
+| IMAGE_NAME     | Name of the Docker image being built                      |
+| IMAGE_TAG      | Unique image tag generated using the Jenkins build number |
+| K8S_DEPLOYMENT | Kubernetes deployment name for Cart Service               |
+| NAMESPACE      | Kubernetes namespace where the application is deployed    |
 
-↓
-
-Jenkins Pipeline
-
-↓
-
-Docker Image Build
-
-↓
-
-Amazon ECR
-
-↓
-
-Kubernetes Deployment Update
-
-↓
-
-Application Running on Kubernetes Cluster
-
----
-
-# 3. Repository Structure
-
-The pipeline expects the following structure inside the Git repository.
+### Configured Values
 
 ```text
-src/
- └── cart/
-      ├── src/
-      │    └── Dockerfile
-      └── kubernetes/
-           └── cart/
-                ├── deploy.yaml
-                └── svc.yaml
+AWS_REGION=us-east-1
+
+PUBLIC_ECR_URI=public.ecr.aws/q2a1e2p7/open-telemetry-demo
+
+IMAGE_NAME=cart
+
+IMAGE_TAG=cart-${BUILD_NUMBER}
+
+K8S_DEPLOYMENT=opentelemetry-demo-cartservice
+
+NAMESPACE=default
 ```
 
-Files:
-
-Dockerfile
-
-* Builds Cart Service image.
-
-deploy.yaml
-
-* Kubernetes Deployment definition.
-
-svc.yaml
-
-* Kubernetes Service definition.
-
 ---
-# Complete Jenkinsfile
+# Complete pipeline
 
 ```groovy
 pipeline {
@@ -85,16 +48,12 @@ pipeline {
 
     environment {
 
-        AWS_REGION = "ap-south-1"
-        AWS_ACCOUNT_ID = "0040585065890"
+        AWS_REGION = "us-east-1"
 
-        ECR_REPO = "open-telemetry-registry"
+        PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
 
         IMAGE_NAME = "cart"
-
-        IMAGE_TAG = "${BUILD_NUMBER}"
-
-        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+        IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
 
         K8S_DEPLOYMENT = "opentelemetry-demo-cartservice"
         NAMESPACE = "default"
@@ -105,7 +64,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+                    url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
             }
         }
 
@@ -119,15 +78,14 @@ pipeline {
             }
         }
 
-        stage('ECR Login') {
+        stage('Login Public ECR') {
             steps {
                 sh '''
-                aws ecr get-login-password \
+                aws ecr-public get-login-password \
                 --region ${AWS_REGION} | \
                 docker login \
                 --username AWS \
-                --password-stdin \
-                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                --password-stdin public.ecr.aws
                 '''
             }
         }
@@ -147,15 +105,20 @@ pipeline {
                 sh '''
                 docker tag \
                 ${IMAGE_NAME}:${IMAGE_TAG} \
-                ${ECR_URI}:${IMAGE_TAG}
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
                 '''
             }
         }
 
-        stage('Push Image To ECR') {
+        stage('Push Image To Public ECR') {
             steps {
                 sh '''
-                docker push ${ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
                 '''
             }
         }
@@ -163,10 +126,10 @@ pipeline {
         stage('Update Manifest') {
             steps {
                 sh '''
-                sed -i "s|ghcr.io/open-telemetry/demo:1.12.0-cartservice|${ECR_URI}:${IMAGE_TAG}|g" \
+                sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
                 src/cart/kubernetes/cart/deploy.yaml
 
-                echo "Updated Images:"
+                echo "Updated Image:"
                 grep -n "image:" src/cart/kubernetes/cart/deploy.yaml
                 '''
             }
@@ -184,7 +147,9 @@ pipeline {
         stage('Rollout Status') {
             steps {
                 sh '''
-                kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${NAMESPACE}
+                kubectl rollout status deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
                 '''
             }
         }
@@ -193,438 +158,411 @@ pipeline {
     post {
 
         success {
-            echo 'Cart Service Deployment Successful'
+            echo "Cart Service Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
         }
 
         failure {
-            echo 'Pipeline Failed'
+            echo "Pipeline Failed"
         }
 
         always {
             sh '''
-            docker image prune -f || true
+            docker image prune -af || true
             '''
         }
     }
 }
 
 ```
+# Pipeline Workflow
 
-# 4. Jenkins Pipeline Configuration
-
-## Environment Variables
-
-| Variable       | Value                          |
-| -------------- | ------------------------------ |
-| AWS_REGION     | ap-south-1                     |
-| AWS_ACCOUNT_ID | 0040585065890                  |
-| ECR_REPO       | open-telemetry-registry        |
-| IMAGE_NAME     | cart                           |
-| IMAGE_TAG      | BUILD_NUMBER                   |
-| K8S_DEPLOYMENT | opentelemetry-demo-cartservice |
-| NAMESPACE      | default                        |
-
----
-
-# 5. Pipeline Stages
+The pipeline consists of multiple stages that execute sequentially.
 
 ## Stage 1: Checkout Source Code
 
-### Objective
+### Purpose
 
-Retrieve the latest Cart Service source code from GitHub.
+Retrieves the latest source code from the GitHub repository.
 
-### Pipeline Code
+### Actions Performed
 
-```groovy
-stage('Checkout') {
-    steps {
-        git branch: 'main',
-        url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
-    }
-}
+* Connects to GitHub repository.
+* Checks out the main branch.
+* Downloads the latest application source code into the Jenkins workspace.
+
+### Command Executed
+
+```bash
+git branch: 'main'
 ```
 
-### Execution Flow
+### Outcome
 
-1. Jenkins connects to GitHub.
-2. Main branch is cloned.
-3. Source code becomes available in Jenkins workspace.
-
-### Expected Output
-
-```text
-Checking out Revision xxxx
-Branch main
-Finished cloning repository
-```
+Latest Cart Service source code becomes available for build and deployment.
 
 ---
 
-## Stage 2: Verify Tools
+## Stage 2: Verify Required Tools
 
-### Objective
+### Purpose
 
-Verify that all required tools are installed.
+Ensures that all required tools are installed and accessible on the Jenkins agent.
 
 ### Tools Verified
 
-| Tool    | Purpose               |
-| ------- | --------------------- |
-| AWS CLI | ECR Authentication    |
-| Docker  | Image Build & Push    |
-| kubectl | Kubernetes Deployment |
+* AWS CLI
+* kubectl
+* Docker
 
-### Pipeline Code
+### Commands Executed
 
-```groovy
-stage('Verify Tools') {
-    steps {
-        sh '''
-        aws --version
-        kubectl version --client
-        docker --version
-        '''
-    }
-}
+```bash
+aws --version
+
+kubectl version --client
+
+docker --version
 ```
 
-### Expected Output
+### Outcome
 
-```text
-aws-cli/2.x.x
-Client Version: v1.30.x
-Docker version 27.x.x
-```
+Validation that the Jenkins agent has all required dependencies before proceeding.
 
 ---
 
-## Stage 3: Amazon ECR Authentication
+## Stage 3: Authenticate with Amazon ECR Public
 
-### Objective
+### Purpose
 
-Authenticate Jenkins with Amazon ECR.
+Authenticates Docker with Amazon ECR Public so that images can be pushed successfully.
 
-### Pipeline Code
+### Actions Performed
 
-```groovy
-stage('ECR Login') {
-    steps {
-        sh '''
-        aws ecr get-login-password \
-        --region ${AWS_REGION} | \
-        docker login \
-        --username AWS \
-        --password-stdin \
-        ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-        '''
-    }
-}
+* Generates an authentication token using AWS CLI.
+* Passes the token securely to Docker.
+* Logs Docker into Amazon ECR Public Registry.
+
+### Command Executed
+
+```bash
+aws ecr-public get-login-password \
+--region us-east-1 | \
+docker login \
+--username AWS \
+--password-stdin public.ecr.aws
 ```
 
-### Execution Flow
+### Outcome
 
-1. AWS generates temporary login token.
-2. Docker authenticates with ECR.
-3. Secure image push access is established.
-
-### Expected Output
-
-```text
-Login Succeeded
-```
+Docker receives authorization to push images to the public repository.
 
 ---
 
 ## Stage 4: Build Docker Image
 
-### Objective
+### Purpose
 
-Build the Cart Service Docker image.
+Builds the Cart Service container image.
 
-### Pipeline Code
+### Actions Performed
 
-```groovy
-stage('Build Docker Image') {
-    steps {
-        sh '''
-        docker build \
-        -t ${IMAGE_NAME}:${IMAGE_TAG} \
-        -f src/cart/src/Dockerfile .
-        '''
-    }
-}
-```
+* Uses the Cart Service Dockerfile.
+* Compiles the application.
+* Creates a Docker image with a unique build tag.
 
-### Build Inputs
-
-| Input       | Description                   |
-| ----------- | ----------------------------- |
-| Dockerfile  | Cart Service Dockerfile       |
-| Source Code | Cart Service Application Code |
-
-### Execution Flow
-
-1. Docker reads Dockerfile.
-2. Downloads required base image.
-3. Copies application source.
-4. Builds image layers.
-5. Creates final container image.
-
-### Example Image
+### Dockerfile Location
 
 ```text
-cart:25
+src/cart/src/Dockerfile
 ```
 
-### Expected Output
+### Build Command
 
-```text
-Successfully built abc123
-Successfully tagged cart:25
+```bash
+docker build \
+-t cart:cart-${BUILD_NUMBER} \
+-f src/cart/src/Dockerfile .
 ```
+
+### Outcome
+
+A Docker image is generated locally on the Jenkins build agent.
 
 ---
 
 ## Stage 5: Tag Docker Image
 
-### Objective
+### Purpose
 
-Prepare image for Amazon ECR.
+Creates repository tags required for publishing images to Amazon ECR Public.
 
-### Pipeline Code
+### Tags Generated
 
-```groovy
-stage('Tag Image') {
-    steps {
-        sh '''
-        docker tag \
-        ${IMAGE_NAME}:${IMAGE_TAG} \
-        ${ECR_URI}:${IMAGE_TAG}
-        '''
-    }
-}
-```
-
-### Example
-
-Before:
+#### Build-Specific Tag
 
 ```text
-cart:25
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-BUILD_NUMBER
 ```
 
-After:
+#### Latest Tag
 
 ```text
-004058506543.dkr.ecr.ap-south-1.amazonaws.com/open-telemetry-registry:25
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-latest
 ```
 
-### Importance
+### Commands Executed
 
-* Required before pushing image to ECR.
-* Associates image with correct repository.
+```bash
+docker tag \
+cart:cart-${BUILD_NUMBER} \
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-${BUILD_NUMBER}
+
+docker tag \
+cart:cart-${BUILD_NUMBER} \
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-latest
+```
+
+### Outcome
+
+The image becomes ready for publication to Amazon ECR Public.
 
 ---
 
-## Stage 6: Push Image To ECR
+## Stage 6: Push Image to Amazon ECR Public
 
-### Objective
+### Purpose
 
-Upload Cart Service image to Amazon ECR.
+Publishes the Docker image to the public container registry.
 
-### Pipeline Code
+### Actions Performed
 
-```groovy
-stage('Push Image To ECR') {
-    steps {
-        sh '''
-        docker push ${ECR_URI}:${IMAGE_TAG}
-        '''
-    }
-}
+Pushes two image versions:
+
+1. Build-specific image
+2. Latest image
+
+### Commands Executed
+
+```bash
+docker push public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-${BUILD_NUMBER}
+
+docker push public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-latest
 ```
 
-### Execution Flow
+### Outcome
 
-1. Docker connects to ECR.
-2. Uploads image layers.
-3. Creates image manifest.
-4. Stores image in repository.
-
-### Expected Output
-
-```text
-Layer already exists
-Pushed
-digest: sha256:xxxx
-```
+Container images become publicly available for deployment.
 
 ---
 
 ## Stage 7: Update Kubernetes Manifest
 
-### Objective
+### Purpose
 
-Replace old Cart Service image with newly built image.
+Updates the deployment manifest with the newly generated image tag.
 
-### Pipeline Code
+### Actions Performed
 
-```groovy
-stage('Update Manifest') {
-    steps {
-        sh '''
-        sed -i "s|ghcr.io/open-telemetry/demo:1.12.0-cartservice|${ECR_URI}:${IMAGE_TAG}|g" \
-        src/cart/kubernetes/cart/deploy.yaml
+* Locates the image field in the deployment YAML.
+* Replaces the existing image reference.
+* Inserts the newly pushed image tag.
 
-        grep -n "image:" src/cart/kubernetes/cart/deploy.yaml
-        '''
-    }
-}
-```
-
-### Execution Flow
-
-1. Jenkins opens deploy.yaml.
-2. Finds existing image reference.
-3. Replaces it with latest ECR image.
-4. Verifies update.
-
-### Example
-
-Before:
-
-```yaml
-image: ghcr.io/open-telemetry/demo:1.12.0-cartservice
-```
-
-After:
-
-```yaml
-image: 004058506543.dkr.ecr.ap-south-1.amazonaws.com/open-telemetry-registry:25
-```
-
-### Importance
-
-* Ensures Kubernetes deploys the latest build.
-* Eliminates manual YAML modifications.
-
----
-
-## Stage 8: Deploy To Kubernetes
-
-### Objective
-
-Deploy Cart Service into Kubernetes cluster.
-
-### Pipeline Code
-
-```groovy
-stage('Deploy To Kubernetes') {
-    steps {
-        sh '''
-        kubectl apply -f src/cart/kubernetes/cart/deploy.yaml
-        kubectl apply -f src/cart/kubernetes/cart/svc.yaml
-        '''
-    }
-}
-```
-
-### Resources Applied
-
-| Resource   | Purpose                 |
-| ---------- | ----------------------- |
-| Deployment | Pod Management          |
-| Service    | Internal Cluster Access |
-
-### Execution Flow
-
-1. Deployment manifest applied.
-2. Service manifest applied.
-3. Kubernetes detects image update.
-4. Rolling deployment starts.
-
----
-
-## Stage 9: Rollout Status Verification
-
-### Objective
-
-Verify successful deployment rollout.
-
-### Pipeline Code
-
-```groovy
-stage('Rollout Status') {
-    steps {
-        sh '''
-        kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${NAMESPACE}
-        '''
-    }
-}
-```
-
-### Execution Flow
-
-1. Kubernetes creates new pods.
-2. Readiness checks pass.
-3. Old pods terminate.
-4. Deployment completes successfully.
-
-### Expected Output
+### Manifest File
 
 ```text
-deployment "opentelemetry-demo-cartservice" successfully rolled out
+src/cart/kubernetes/cart/deploy.yaml
 ```
+
+### Command Executed
+
+```bash
+sed -i "s|image:.*|image: public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-${BUILD_NUMBER}|g" \
+src/cart/kubernetes/cart/deploy.yaml
+```
+
+### Verification
+
+```bash
+grep -n "image:" src/cart/kubernetes/cart/deploy.yaml
+```
+
+### Outcome
+
+Deployment manifest references the latest image generated by the pipeline.
 
 ---
 
-# 6. Post Actions
+## Stage 8: Deploy to Kubernetes
 
-## Success
+### Purpose
 
-```groovy
-success {
-    echo 'Cart Service Deployment Successful'
-}
+Applies Kubernetes resources to the cluster.
+
+### Resources Deployed
+
+#### Deployment
+
+```text
+src/cart/kubernetes/cart/deploy.yaml
 ```
 
-Displays successful deployment message.
+#### Service
 
-## Failure
-
-```groovy
-failure {
-    echo 'Pipeline Failed'
-}
+```text
+src/cart/kubernetes/cart/svc.yaml
 ```
 
-Displays failure notification.
+### Commands Executed
 
-## Cleanup
+```bash
+kubectl apply -f src/cart/kubernetes/cart/deploy.yaml
 
-```groovy
-always {
-    sh '''
-    docker image prune -f || true
-    '''
-}
+kubectl apply -f src/cart/kubernetes/cart/svc.yaml
 ```
 
-Removes unused Docker images and frees Jenkins server disk space.
+### Outcome
+
+Kubernetes updates the Cart Service deployment using the newly published container image.
 
 ---
 
-# 7. Outcome
+## Stage 9: Verify Rollout Status
 
-After successful execution of the pipeline:
+### Purpose
 
-* Cart Service source code is retrieved from GitHub.
-* Docker image is built automatically.
-* Image is pushed to Amazon ECR.
-* Kubernetes manifests are updated.
-* Latest version is deployed to the Kubernetes cluster.
-* Rollout status is verified.
-* Temporary Docker artifacts are cleaned up automatically.
+Confirms that the deployment has been successfully rolled out.
 
-This implementation provides a fully automated CI/CD workflow for Cart Service deployment using Jenkins, Docker, Amazon ECR, and Kubernetes.
+### Actions Performed
+
+* Monitors deployment progress.
+* Waits for updated pods to become healthy.
+* Verifies successful deployment.
+
+### Command Executed
+
+```bash
+kubectl rollout status \
+deployment/opentelemetry-demo-cartservice \
+-n default \
+--timeout=300s
+```
+
+### Outcome
+
+The pipeline confirms successful deployment or reports rollout failures.
+
+---
+
+# Post-Build Actions
+
+## Success Handling
+
+When all stages complete successfully:
+
+```text
+Cart Service Deployment Successful
+Image Pushed: public.ecr.aws/q2a1e2p7/open-telemetry-demo:cart-BUILD_NUMBER
+```
+
+### Purpose
+
+Provides deployment confirmation and image details.
+
+---
+
+## Failure Handling
+
+If any stage fails:
+
+```text
+Pipeline Failed
+```
+
+### Purpose
+
+Clearly indicates deployment failure for troubleshooting.
+
+---
+
+## Workspace Cleanup
+
+### Purpose
+
+Removes unused Docker images from the Jenkins agent to free disk space.
+
+### Command Executed
+
+```bash
+docker image prune -af || true
+```
+
+### Outcome
+
+Prevents disk space exhaustion on Jenkins build servers.
+
+---
+
+# Pipeline Benefits
+
+## Automated Build Process
+
+Eliminates manual image creation and deployment activities.
+
+## Versioned Container Images
+
+Each build receives a unique tag based on the Jenkins build number.
+
+## Latest Image Tracking
+
+Maintains a dedicated latest tag for quick access to the most recent version.
+
+## Consistent Deployments
+
+Ensures Kubernetes always deploys the exact image generated by the pipeline.
+
+## Automated Rollout Validation
+
+Verifies application availability after deployment.
+
+## Reduced Operational Effort
+
+Provides an end-to-end automated CI/CD workflow from source code checkout to production deployment.
+
+---
+
+# Deployment Flow Summary
+
+```text
+GitHub Repository
+        │
+        ▼
+Checkout Source Code
+        │
+        ▼
+Verify Tools
+        │
+        ▼
+Authenticate with Amazon ECR Public
+        │
+        ▼
+Build Docker Image
+        │
+        ▼
+Tag Image
+        │
+        ▼
+Push Image to Amazon ECR Public
+        │
+        ▼
+Update Kubernetes Manifest
+        │
+        ▼
+Deploy to Kubernetes
+        │
+        ▼
+Verify Rollout Status
+        │
+        ▼
+Application Successfully Running
+```
