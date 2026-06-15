@@ -53,6 +53,8 @@ spec:
               value: 'opentelemetry-demo-flagd'
             - name: FLAGD_PORT
               value: "8013"
+             - name: DB_CONNECTION_STRING
+              value: "<postgres connection string>"
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://$(OTEL_COLLECTOR_NAME):4317
             - name: OTEL_RESOURCE_ATTRIBUTES
