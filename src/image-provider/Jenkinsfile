@@ -1,0 +1,75 @@
+pipeline {
+    agent any
+
+    environment {
+        AWS_REGION = "us-east-1"
+
+        PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
+
+        IMAGE_NAME = "imageprovider"
+        IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
+
+        K8S_DEPLOYMENT = "opentelemetry-demo-imageprovider"
+        NAMESPACE = "default"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh """
+                docker build \
+                  -t ${PUBLIC_ECR_URI}:${IMAGE_TAG} \
+                  -f src/image-provider/Dockerfile \
+                  .
+                """
+            }
+        }
+
+        stage('Login to Public ECR') {
+            steps {
+                sh '''
+                aws ecr-public get-login-password \
+                --region us-east-1 | \
+                docker login \
+                --username AWS \
+                --password-stdin public.ecr.aws
+                '''
+            }
+        }
+
+        stage('Push Image') {
+            steps {
+                sh """
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                """
+            }
+        }
+
+        stage('Update Deployment') {
+            steps {
+                sh """
+                kubectl set image deployment/${K8S_DEPLOYMENT} \
+                imageprovider=${PUBLIC_ECR_URI}:${IMAGE_TAG} \
+                -n ${NAMESPACE}
+
+                kubectl rollout status deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE}
+                """
+            }
+        }
+    }
+
+    post {
+        success {
+            echo "ImageProvider deployment updated successfully"
+        }
+    }
+}
