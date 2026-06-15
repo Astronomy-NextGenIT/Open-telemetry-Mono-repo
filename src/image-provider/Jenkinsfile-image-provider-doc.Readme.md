@@ -1,78 +1,63 @@
 # ImageProvider CI/CD Pipeline Documentation
 
-## Overview
+## Project Overview
 
-This document describes the CI/CD pipeline for the OpenTelemetry Demo ImageProvider service.
+The ImageProvider service is part of the OpenTelemetry Demo application. This service serves static image content using an NGINX-based container.
 
-The pipeline performs the following operations:
+A Jenkins CI/CD pipeline has been implemented to automate:
 
-1. Clones the source code from GitHub.
-2. Builds the Docker image for the ImageProvider service.
-3. Authenticates with AWS Public ECR.
-4. Pushes the Docker image to Public ECR.
-5. Updates the Kubernetes deployment with the newly built image.
-6. Verifies the deployment rollout.
+* Source code checkout from GitHub
+* Docker image build
+* Docker image tagging
+* Push image to AWS Public ECR
+* Update Kubernetes deployment manifest
+* Deploy manifests to Kubernetes
+* Verify successful rollout
 
 ---
 
 # Service Information
 
-### Service Name
-
-ImageProvider
-
-### Repository Path
-
-```text
-src/image-provider
-```
-
-### Kubernetes Deployment
-
-```text
-opentelemetry-demo-imageprovider
-```
-
-### Container Name
-
-```text
-imageprovider
-```
-
-### Namespace
-
-```text
-default
-```
-
-### Dockerfile Location
-
-```text
-src/image-provider/Dockerfile
-```
+| Parameter                | Value                                             |
+| ------------------------ | ------------------------------------------------- |
+| Service Name             | imageprovider                                     |
+| Kubernetes Deployment    | opentelemetry-demo-imageprovider                  |
+| Namespace                | default                                           |
+| Dockerfile Location      | src/image-provider/Dockerfile                     |
+| Deployment Manifest      | src/image-provider/kubernetes/deploy.yaml         |
+| Service Manifest         | src/image-provider/kubernetes/svc.yaml            |
+| Service Account Manifest | src/image-provider/kubernetes/serviceaccount.yaml |
+| Public ECR Repository    | public.ecr.aws/q2a1e2p7/open-telemetry-demo       |
 
 ---
 
-# Architecture Flow
+# CI/CD Workflow
 
-```text
 GitHub Repository
-        │
-        ▼
+
+↓
+
 Jenkins Pipeline
-        │
-        ▼
+
+↓
+
 Docker Build
-        │
-        ▼
+
+↓
+
 AWS Public ECR
-        │
-        ▼
-Kubernetes Deployment Update
-        │
-        ▼
-New Pod Rollout
-```
+
+↓
+
+Manifest Update
+
+↓
+
+Kubernetes Deployment
+
+↓
+
+Rollout Verification
 
 ---
 
@@ -104,22 +89,21 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Verify Tools') {
             steps {
-                sh """
-                docker build \
-                  -t ${PUBLIC_ECR_URI}:${IMAGE_TAG} \
-                  -f src/image-provider/Dockerfile \
-                  .
-                """
+                sh '''
+                aws --version
+                kubectl version --client
+                docker --version
+                '''
             }
         }
 
-        stage('Login to Public ECR') {
+        stage('Login Public ECR') {
             steps {
                 sh '''
                 aws ecr-public get-login-password \
-                --region us-east-1 | \
+                --region ${AWS_REGION} | \
                 docker login \
                 --username AWS \
                 --password-stdin public.ecr.aws
@@ -127,35 +111,89 @@ pipeline {
             }
         }
 
-        stage('Push Image') {
+        stage('Build Docker Image') {
             steps {
-                sh """
-                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
-                """
+                sh '''
+                docker build \
+                -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                -f src/image-provider/Dockerfile .
+                '''
             }
         }
 
-        stage('Update Deployment') {
+        stage('Tag Image') {
             steps {
-                sh """
-                kubectl set image deployment/${K8S_DEPLOYMENT} \
-                imageprovider=${PUBLIC_ECR_URI}:${IMAGE_TAG} \
-                -n ${NAMESPACE}
+                sh '''
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
 
-                kubectl rollout status deployment/${K8S_DEPLOYMENT} \
-                -n ${NAMESPACE}
-                """
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Push Image To Public ECR') {
+            steps {
+                sh '''
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Update Manifest') {
+            steps {
+                sh '''
+                sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
+                src/image-provider/kubernetes/deploy.yaml
+
+                echo "Updated Image:"
+                grep -n "image:" \
+                src/image-provider/kubernetes/deploy.yaml
+                '''
+            }
+        }
+
+        stage('Deploy To Kubernetes') {
+            steps {
+                sh '''
+                kubectl apply -f src/image-provider/kubernetes/serviceaccount.yaml
+                kubectl apply -f src/image-provider/kubernetes/deploy.yaml
+                kubectl apply -f src/image-provider/kubernetes/svc.yaml
+                '''
+            }
+        }
+
+        stage('Rollout Status') {
+            steps {
+                sh '''
+                kubectl rollout status \
+                deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
+                '''
             }
         }
     }
 
     post {
+
         success {
-            echo "ImageProvider deployment updated successfully"
+            echo "ImageProvider Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
         }
 
         failure {
-            echo "ImageProvider deployment failed"
+            echo "ImageProvider Pipeline Failed"
+        }
+
+        always {
+            sh '''
+            docker image prune -af || true
+            '''
         }
     }
 }
@@ -163,56 +201,41 @@ pipeline {
 
 ---
 
-# Stage-by-Stage Explanation
+# Pipeline Stage Explanation
 
-## Stage 1: Checkout
+## Stage 1 – Checkout
 
 Purpose:
 
-Clone the latest source code from GitHub.
-
-Command:
-
-```groovy
-git branch: 'main',
-url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
-```
+Download the latest source code from GitHub.
 
 Output:
 
-```text
-Workspace populated with latest code
-```
+Latest ImageProvider source code is available in Jenkins workspace.
 
 ---
 
-## Stage 2: Build Docker Image
+## Stage 2 – Verify Tools
 
 Purpose:
 
-Build the ImageProvider Docker image.
+Verify required tools are installed and accessible.
 
-Command:
+Commands Executed:
 
 ```bash
-docker build \
--t public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-${BUILD_NUMBER} \
--f src/image-provider/Dockerfile .
-```
-
-Generated Image Example:
-
-```text
-public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-12
+aws --version
+kubectl version --client
+docker --version
 ```
 
 ---
 
-## Stage 3: Login to Public ECR
+## Stage 3 – Login Public ECR
 
 Purpose:
 
-Authenticate Jenkins to AWS Public ECR.
+Authenticate Docker with AWS Public ECR.
 
 Command:
 
@@ -224,7 +247,7 @@ docker login \
 --password-stdin public.ecr.aws
 ```
 
-Expected Result:
+Expected Output:
 
 ```text
 Login Succeeded
@@ -232,49 +255,111 @@ Login Succeeded
 
 ---
 
-## Stage 4: Push Image
+## Stage 4 – Build Docker Image
 
 Purpose:
 
-Push the newly built image to Public ECR.
+Build the ImageProvider Docker image.
 
 Command:
 
 ```bash
-docker push public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-${BUILD_NUMBER}
+docker build \
+-t imageprovider:imageprovider-${BUILD_NUMBER} \
+-f src/image-provider/Dockerfile .
 ```
 
-Expected Result:
+Example:
 
 ```text
-Pushed image successfully
+imageprovider:imageprovider-25
 ```
 
 ---
 
-## Stage 5: Update Kubernetes Deployment
+## Stage 5 – Tag Image
 
 Purpose:
 
-Update the running deployment with the new image.
+Create ECR-compatible tags.
+
+Generated Tags:
+
+```text
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-25
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-latest
+```
+
+---
+
+## Stage 6 – Push Image To Public ECR
+
+Purpose:
+
+Upload image to AWS Public ECR.
+
+Commands:
+
+```bash
+docker push public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-25
+docker push public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-latest
+```
+
+---
+
+## Stage 7 – Update Manifest
+
+Purpose:
+
+Replace the existing image in deploy.yaml with the newly built image.
+
+Before:
+
+```yaml
+image: ghcr.io/open-telemetry/demo:1.12.0-imageprovider
+```
+
+After:
+
+```yaml
+image: public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-25
+```
 
 Command:
 
 ```bash
-kubectl set image deployment/opentelemetry-demo-imageprovider \
-imageprovider=public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-${BUILD_NUMBER}
-```
-
-This updates:
-
-```text
-Container Name: imageprovider
-Deployment Name: opentelemetry-demo-imageprovider
+sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g"
 ```
 
 ---
 
-## Rollout Verification
+## Stage 8 – Deploy To Kubernetes
+
+Purpose:
+
+Deploy updated manifests to Kubernetes.
+
+Commands:
+
+```bash
+kubectl apply -f serviceaccount.yaml
+kubectl apply -f deploy.yaml
+kubectl apply -f svc.yaml
+```
+
+Resources Created:
+
+* ServiceAccount
+* Deployment
+* Service
+
+---
+
+## Stage 9 – Rollout Status
+
+Purpose:
+
+Wait for Kubernetes deployment to become healthy.
 
 Command:
 
@@ -282,7 +367,7 @@ Command:
 kubectl rollout status deployment/opentelemetry-demo-imageprovider
 ```
 
-Expected Output:
+Expected Result:
 
 ```text
 deployment "opentelemetry-demo-imageprovider" successfully rolled out
@@ -290,23 +375,46 @@ deployment "opentelemetry-demo-imageprovider" successfully rolled out
 
 ---
 
-# Validation Commands
+# Post Build Actions
 
-## Verify Deployment Image
+## Success
 
-```bash
-kubectl describe deployment opentelemetry-demo-imageprovider | grep Image
-```
-
-Expected:
+Displays:
 
 ```text
-Image: public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-<build-number>
+ImageProvider Deployment Successful
+Image Pushed: public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-25
+```
+
+## Failure
+
+Displays:
+
+```text
+ImageProvider Pipeline Failed
+```
+
+## Cleanup
+
+Removes unused Docker images:
+
+```bash
+docker image prune -af
 ```
 
 ---
 
-## Verify Pod Status
+# Verification Commands
+
+## Verify Deployment
+
+```bash
+kubectl get deployment opentelemetry-demo-imageprovider
+```
+
+---
+
+## Verify Pods
 
 ```bash
 kubectl get pods | grep imageprovider
@@ -320,83 +428,28 @@ Expected:
 
 ---
 
-## Verify Rollout History
+## Verify Image
 
 ```bash
-kubectl rollout history deployment/opentelemetry-demo-imageprovider
-```
-
----
-
-# Troubleshooting
-
-## Docker Build Failure
-
-Check:
-
-```bash
-src/image-provider/Dockerfile
-```
-
-Verify path exists:
-
-```bash
-ls src/image-provider
-```
-
----
-
-## ECR Login Failure
-
-Verify AWS credentials:
-
-```bash
-aws sts get-caller-identity
-```
-
----
-
-## Push Failure
-
-Verify repository URI:
-
-```text
-public.ecr.aws/q2a1e2p7/open-telemetry-demo
-```
-
----
-
-## Kubernetes Update Failure
-
-Verify deployment exists:
-
-```bash
-kubectl get deployment opentelemetry-demo-imageprovider
-```
-
-Verify container name:
-
-```bash
-kubectl describe deployment opentelemetry-demo-imageprovider
+kubectl describe deployment opentelemetry-demo-imageprovider | grep Image
 ```
 
 Expected:
 
 ```text
-Containers:
-  imageprovider:
+Image: public.ecr.aws/q2a1e2p7/open-telemetry-demo:imageprovider-<BUILD_NUMBER>
 ```
 
 ---
 
-# Success Criteria
+# Expected Outcome
 
-The pipeline is considered successful when:
+After successful execution:
 
-1. Docker image builds successfully.
-2. Image is pushed to Public ECR.
-3. Kubernetes deployment image is updated.
-4. Rollout completes successfully.
-5. Pod reaches Running state.
-6. Deployment uses the newly generated image tag.
-
+* Docker image is built successfully.
+* Image is pushed to AWS Public ECR.
+* Kubernetes deployment is updated.
+* New ImageProvider pod is created.
+* Rollout completes successfully.
+* Service remains available without downtime.
+* Latest image version is running in the cluster.
