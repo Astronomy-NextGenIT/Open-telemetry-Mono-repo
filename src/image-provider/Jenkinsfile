@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+
         AWS_REGION = "us-east-1"
 
         PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
@@ -22,22 +23,21 @@ pipeline {
             }
         }
 
-        stage('Build Docker Image') {
+        stage('Verify Tools') {
             steps {
-                sh """
-                docker build \
-                  -t ${PUBLIC_ECR_URI}:${IMAGE_TAG} \
-                  -f src/image-provider/Dockerfile \
-                  .
-                """
+                sh '''
+                aws --version
+                kubectl version --client
+                docker --version
+                '''
             }
         }
 
-        stage('Login to Public ECR') {
+        stage('Login Public ECR') {
             steps {
                 sh '''
                 aws ecr-public get-login-password \
-                --region us-east-1 | \
+                --region ${AWS_REGION} | \
                 docker login \
                 --username AWS \
                 --password-stdin public.ecr.aws
@@ -45,31 +45,89 @@ pipeline {
             }
         }
 
-        stage('Push Image') {
+        stage('Build Docker Image') {
             steps {
-                sh """
-                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
-                """
+                sh '''
+                docker build \
+                -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                -f src/image-provider/Dockerfile .
+                '''
             }
         }
 
-        stage('Update Deployment') {
+        stage('Tag Image') {
             steps {
-                sh """
-                kubectl set image deployment/${K8S_DEPLOYMENT} \
-                imageprovider=${PUBLIC_ECR_URI}:${IMAGE_TAG} \
-                -n ${NAMESPACE}
+                sh '''
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
 
-                kubectl rollout status deployment/${K8S_DEPLOYMENT} \
-                -n ${NAMESPACE}
-                """
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Push Image To Public ECR') {
+            steps {
+                sh '''
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Update Manifest') {
+            steps {
+                sh '''
+                sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
+                src/image-provider/kubernetes/deploy.yaml
+
+                echo "Updated Image:"
+                grep -n "image:" \
+                src/image-provider/kubernetes/deploy.yaml
+                '''
+            }
+        }
+
+        stage('Deploy To Kubernetes') {
+            steps {
+                sh '''
+                kubectl apply -f src/image-provider/kubernetes/serviceaccount.yaml
+                kubectl apply -f src/image-provider/kubernetes/deploy.yaml
+                kubectl apply -f src/image-provider/kubernetes/svc.yaml
+                '''
+            }
+        }
+
+        stage('Rollout Status') {
+            steps {
+                sh '''
+                kubectl rollout status \
+                deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
+                '''
             }
         }
     }
 
     post {
+
         success {
-            echo "ImageProvider deployment updated successfully"
+            echo "ImageProvider Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
+        }
+
+        failure {
+            echo "ImageProvider Pipeline Failed"
+        }
+
+        always {
+            sh '''
+            docker image prune -af || true
+            '''
         }
     }
 }
