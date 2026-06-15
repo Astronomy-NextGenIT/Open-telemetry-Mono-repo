@@ -20,7 +20,7 @@ RUN apt-get update && \
 
 WORKDIR /app/
 
-COPY /src/shipping/ /app/
+COPY src/shipping/ /app/
 
 # Build - cross-compile for ARM64 or native build
 RUN if [ "${TARGETPLATFORM}" = "linux/arm64" ] && [ "${BUILDPLATFORM}" != "linux/arm64" ] ; then \
