@@ -1,0 +1,132 @@
+pipeline {
+    agent any
+
+    environment {
+
+        AWS_REGION = "us-east-1"
+
+        PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
+
+        IMAGE_NAME = "quoteservice"
+        IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
+
+        K8S_DEPLOYMENT = "opentelemetry-demo-quoteservice"
+        NAMESPACE = "default"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+            }
+        }
+
+        stage('Verify Tools') {
+            steps {
+                sh '''
+                aws --version
+                kubectl version --client
+                docker --version
+                '''
+            }
+        }
+
+        stage('Login Public ECR') {
+            steps {
+                sh '''
+                aws ecr-public get-login-password \
+                --region ${AWS_REGION} | \
+                docker login \
+                --username AWS \
+                --password-stdin public.ecr.aws
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                docker build \
+                -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                -f src/quote/Dockerfile .
+                '''
+            }
+        }
+
+        stage('Tag Image') {
+            steps {
+                sh '''
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Push Image To Public ECR') {
+            steps {
+                sh '''
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Update Manifest') {
+            steps {
+                sh '''
+                sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
+                src/quote/kubernetes/quote/deploy.yaml
+
+                echo "Updated Image:"
+                grep -n "image:" \
+                src/quote/kubernetes/quote/deploy.yaml
+                '''
+            }
+        }
+
+        stage('Deploy To Kubernetes') {
+            steps {
+                sh '''
+                kubectl apply -f src/quote/kubernetes/quote/deploy.yaml
+                kubectl apply -f src/quote/kubernetes/quote/svc.yaml
+                '''
+            }
+        }
+
+        stage('Rollout Status') {
+            steps {
+                sh '''
+                kubectl rollout status \
+                deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Quoteservice Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
+        }
+
+        failure {
+            echo "Quoteservice Pipeline Failed"
+        }
+
+        always {
+            sh '''
+            docker image prune -af || true
+            '''
+        }
+    }
+}
