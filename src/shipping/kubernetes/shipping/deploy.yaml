@@ -46,7 +46,11 @@ spec:
               value: cumulative
             - name: SHIPPING_PORT
               value: "8080"
-            - name: QUOTE_SERVICE_ADDR
+            - name: FLAGD_HOST
+              value: opentelemetry-demo-flagd
+            - name: FLAGD_PORT
+              value: "8013"
+            - name: QUOTE_ADDR
               value: http://opentelemetry-demo-quoteservice:8080
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://$(OTEL_COLLECTOR_NAME):4317
