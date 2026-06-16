@@ -1,94 +1,128 @@
-
 # Checkout Service CI/CD Pipeline Documentation
 
 ## Overview
 
-This Jenkins pipeline automates the build, containerization, deployment, and rollout verification of the Checkout Service application. The pipeline performs the following tasks:
+This document describes the CI/CD pipeline used to build, containerize, publish, and deploy the OpenTelemetry Demo Checkout Service to a Kubernetes cluster using Jenkins.
 
-* Clones source code from GitHub.
-* Verifies required tools.
-* Authenticates with Amazon ECR.
-* Builds a Docker image.
-* Pushes the image to Amazon ECR.
-* Updates Kubernetes deployment manifests.
-* Deploys the application to Kubernetes.
-* Verifies deployment rollout status.
-* Cleans up unused Docker images.
+### Technology Stack
+
+* Jenkins
+* Docker
+* AWS Public ECR
+* Kubernetes
+* GitHub
+* OpenTelemetry Demo Application
 
 ---
 
-## Pipeline Configuration
+# Architecture Flow
 
-### Environment Variables
+GitHub Repository
+↓
+Jenkins Pipeline
+↓
+Docker Build
+↓
+AWS Public ECR
+↓
+Kubernetes Deployment
+↓
+Checkout Service Pod
 
-| Variable       | Description                            |
-| -------------- | -------------------------------------- |
-| AWS_REGION     | AWS region where ECR repository exists |
-| AWS_ACCOUNT_ID | AWS Account ID                         |
-| ECR_REPO       | ECR repository name                    |
-| IMAGE_NAME     | Docker image name (checkout)           |
-| IMAGE_TAG      | Jenkins build number used as image tag |
-| ECR_URI        | Complete ECR repository URI            |
-| K8S_DEPLOYMENT | Kubernetes deployment name             |
-| NAMESPACE      | Kubernetes namespace                   |
+---
+
+# Repository Information
+
+Repository:
+
+https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo
+
+Branch:
+
+main
+
+Service Path:
+
+src/checkout
+
+Dockerfile:
+
+src/checkout/Dockerfile
+
+Deployment Manifest:
+
+src/checkout/kubernetes/checkout/deploy.yaml
+
+Service Manifest:
+
+src/checkout/kubernetes/checkout/svc.yaml
+
+---
+
+# Pipeline Configuration
+
+## Environment Variables
+
+| Variable       | Description                |
+| -------------- | -------------------------- |
+| AWS_REGION     | AWS Public ECR Region      |
+| PUBLIC_ECR_URI | Public ECR Repository URI  |
+| IMAGE_NAME     | Docker image name          |
+| IMAGE_TAG      | Unique build tag           |
+| K8S_DEPLOYMENT | Kubernetes deployment name |
+| NAMESPACE      | Kubernetes namespace       |
+
+Configured Values:
 
 ```groovy
-environment {
-    AWS_REGION = "ap-south-1"
-    AWS_ACCOUNT_ID = "004058506543"
-    ECR_REPO = "open-telemetry-registry"
-    IMAGE_NAME = "checkout"
-    IMAGE_TAG = "${BUILD_NUMBER}"
-    ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
-    K8S_DEPLOYMENT = "opentelemetry-demo-checkoutservice"
-    NAMESPACE = "default"
-}
+AWS_REGION = "us-east-1"
+
+PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
+
+IMAGE_NAME = "checkoutservice"
+
+IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
+
+K8S_DEPLOYMENT = "opentelemetry-demo-checkoutservice"
+
+NAMESPACE = "default"
 ```
 
 ---
 
-## Pipeline Stages
+# Pipeline Stages
 
-### Stage 1: Checkout
+## Stage 1: Checkout Source Code
 
-#### Purpose
+Purpose:
 
-Clones the latest application source code from the GitHub repository.
+Pull latest application code from GitHub repository.
 
-#### Actions Performed
-
-* Connects to GitHub.
-* Checks out the `main` branch.
-* Downloads the latest source code into the Jenkins workspace.
+Pipeline Code:
 
 ```groovy
 stage('Checkout') {
     steps {
         git branch: 'main',
-        url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+            url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
     }
 }
 ```
 
-#### Output
+Outcome:
 
-Latest Checkout Service source code becomes available in Jenkins workspace.
+* Latest source code downloaded.
+* Jenkins workspace updated.
 
 ---
 
-### Stage 2: Verify Tools
+## Stage 2: Verify Required Tools
 
-#### Purpose
+Purpose:
 
-Ensures that all required tools are installed on the Jenkins server.
+Ensure required tools are available on Jenkins server.
 
-#### Actions Performed
-
-Checks versions of:
-
-* AWS CLI
-* Kubectl
-* Docker
+Pipeline Code:
 
 ```groovy
 stage('Verify Tools') {
@@ -102,59 +136,49 @@ stage('Verify Tools') {
 }
 ```
 
-#### Output
+Verifies:
 
-Displays installed tool versions in Jenkins console logs.
+* AWS CLI
+* Kubectl
+* Docker
 
 ---
 
-### Stage 3: ECR Login
+## Stage 3: Login to AWS Public ECR
 
-#### Purpose
+Purpose:
 
-Authenticates Docker with Amazon Elastic Container Registry (ECR).
+Authenticate Docker client with AWS Public ECR.
 
-#### Actions Performed
-
-* Retrieves ECR authentication token.
-* Logs Docker into ECR.
+Pipeline Code:
 
 ```groovy
-stage('ECR Login') {
+stage('Login Public ECR') {
     steps {
         sh '''
-        aws ecr get-login-password \
+        aws ecr-public get-login-password \
         --region ${AWS_REGION} | \
         docker login \
         --username AWS \
-        --password-stdin \
-        ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+        --password-stdin public.ecr.aws
         '''
     }
 }
 ```
 
-#### Output
+Outcome:
 
-Docker is successfully authenticated with Amazon ECR.
+Docker can push images to Public ECR.
 
 ---
 
-### Stage 4: Build Docker Image
+## Stage 4: Build Docker Image
 
-#### Purpose
+Purpose:
 
-Builds a Docker image for the Checkout Service.
+Create Docker image for Checkout Service.
 
-#### Actions Performed
-
-Uses the Checkout Service Dockerfile:
-
-```text
-src/checkout/Dockerfile
-```
-
-Build command:
+Pipeline Code:
 
 ```groovy
 stage('Build Docker Image') {
@@ -168,30 +192,27 @@ stage('Build Docker Image') {
 }
 ```
 
-#### Example
+Example:
 
-```text
-checkout:25
+```bash
+docker build \
+-t checkoutservice:checkoutservice-7 \
+-f src/checkout/Dockerfile .
 ```
 
-Where:
+Outcome:
 
-* checkout = image name
-* 25 = Jenkins build number
-
-#### Output
-
-A Docker image is created locally on the Jenkins server.
+Docker image successfully built.
 
 ---
 
-### Stage 5: Tag Image
+## Stage 5: Tag Docker Image
 
-#### Purpose
+Purpose:
 
-Tags the locally built Docker image with the ECR repository URI.
+Tag image for AWS Public ECR repository.
 
-#### Actions Performed
+Pipeline Code:
 
 ```groovy
 stage('Tag Image') {
@@ -199,102 +220,97 @@ stage('Tag Image') {
         sh '''
         docker tag \
         ${IMAGE_NAME}:${IMAGE_TAG} \
-        ${ECR_URI}:${IMAGE_TAG}
+        ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+        docker tag \
+        ${IMAGE_NAME}:${IMAGE_TAG} \
+        ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
         '''
     }
 }
 ```
 
-#### Example
+Generated Tags:
 
 ```text
-004058506543.dkr.ecr.ap-south-1.amazonaws.com/open-telemetry-registry:25
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:checkoutservice-7
+
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:checkoutservice-latest
 ```
-
-#### Output
-
-Docker image is prepared for upload to ECR.
 
 ---
 
-### Stage 6: Push Image To ECR
+## Stage 6: Push Image to AWS Public ECR
 
-#### Purpose
+Purpose:
 
-Uploads the Docker image to Amazon ECR.
+Upload image to Public ECR.
 
-#### Actions Performed
+Pipeline Code:
 
 ```groovy
-stage('Push Image To ECR') {
+stage('Push Image To Public ECR') {
     steps {
         sh '''
-        docker push ${ECR_URI}:${IMAGE_TAG}
+        docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+        docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
         '''
     }
 }
 ```
 
-#### Output
+Outcome:
 
-Docker image is stored in Amazon ECR and available for deployment.
+Image available globally through AWS Public ECR.
 
 ---
 
-### Stage 7: Update Manifest
+## Stage 7: Update Kubernetes Manifest
 
-#### Purpose
+Purpose:
 
-Updates the Kubernetes deployment manifest with the newly created image.
+Replace existing image reference with newly built image.
 
-#### Actions Performed
-
-Replaces the default image:
-
-```text
-ghcr.io/open-telemetry/demo:1.12.0-checkoutservice
-```
-
-With:
-
-```text
-004058506543.dkr.ecr.ap-south-1.amazonaws.com/open-telemetry-registry:<BUILD_NUMBER>
-```
-
-Command:
+Pipeline Code:
 
 ```groovy
 stage('Update Manifest') {
     steps {
         sh '''
-        sed -i "s|ghcr.io/open-telemetry/demo:1.12.0-checkoutservice|${ECR_URI}:${IMAGE_TAG}|g" \
+        sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
         src/checkout/kubernetes/checkout/deploy.yaml
 
         echo "Updated Image:"
-        grep -n "image:" src/checkout/kubernetes/checkout/deploy.yaml
+        grep -n "image:" \
+        src/checkout/kubernetes/checkout/deploy.yaml
         '''
     }
 }
 ```
 
-#### Output
+Example Transformation:
 
-Deployment manifest is updated with the latest image version.
+Before:
+
+```yaml
+image: ghcr.io/open-telemetry/demo:1.12.0-checkoutservice
+```
+
+After:
+
+```yaml
+image: public.ecr.aws/q2a1e2p7/open-telemetry-demo:checkoutservice-7
+```
 
 ---
 
-### Stage 8: Deploy To Kubernetes
+## Stage 8: Deploy to Kubernetes
 
-#### Purpose
+Purpose:
 
-Deploys the Checkout Service to the Kubernetes cluster.
+Apply updated deployment and service manifests.
 
-#### Actions Performed
-
-Applies:
-
-1. Deployment Manifest
-2. Service Manifest
+Pipeline Code:
 
 ```groovy
 stage('Deploy To Kubernetes') {
@@ -307,46 +323,36 @@ stage('Deploy To Kubernetes') {
 }
 ```
 
-#### Files Used
+Outcome:
 
-```text
-src/checkout/kubernetes/checkout/deploy.yaml
-src/checkout/kubernetes/checkout/svc.yaml
-```
-
-#### Output
-
-Kubernetes resources are created or updated.
+* Deployment updated
+* New ReplicaSet created
+* New pod scheduled
 
 ---
 
-### Stage 9: Rollout Status
+## Stage 9: Verify Rollout
 
-#### Purpose
+Purpose:
 
-Verifies that the Kubernetes deployment completes successfully.
+Ensure deployment completes successfully.
 
-#### Actions Performed
+Pipeline Code:
 
 ```groovy
 stage('Rollout Status') {
     steps {
         sh '''
-        kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${NAMESPACE}
+        kubectl rollout status \
+        deployment/${K8S_DEPLOYMENT} \
+        -n ${NAMESPACE} \
+        --timeout=300s
         '''
     }
 }
 ```
 
-#### Deployment Monitored
-
-```text
-opentelemetry-demo-checkoutservice
-```
-
-#### Output
-
-Jenkins waits until:
+Successful Output:
 
 ```text
 deployment "opentelemetry-demo-checkoutservice" successfully rolled out
@@ -354,116 +360,180 @@ deployment "opentelemetry-demo-checkoutservice" successfully rolled out
 
 ---
 
-## Post Actions
+# Post Actions
 
-### Success
-
-Executed when the pipeline completes successfully.
+## Success
 
 ```groovy
 success {
-    echo 'Checkout Service Deployment Successful'
+    echo "Checkout Service Deployment Successful"
+    echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
 }
 ```
 
-Output:
-
-```text
-Checkout Service Deployment Successful
-```
+Displays deployment success message.
 
 ---
 
-### Failure
-
-Executed if any stage fails.
+## Failure
 
 ```groovy
 failure {
-    echo 'Pipeline Failed'
+    echo "Checkout Service Pipeline Failed"
 }
 ```
 
-Output:
-
-```text
-Pipeline Failed
-```
+Displays failure notification.
 
 ---
 
-### Always
-
-Runs regardless of pipeline result.
-
-#### Purpose
-
-Removes unused Docker images from the Jenkins server to save disk space.
+## Cleanup
 
 ```groovy
 always {
     sh '''
-    docker image prune -f || true
+    docker image prune -af || true
     '''
 }
 ```
 
-#### Benefits
-
-* Frees disk space.
-* Prevents Jenkins server storage issues.
-* Keeps Docker environment clean.
+Removes unused Docker images and frees disk space.
 
 ---
 
-# Complete CI/CD Flow
+# Complete Jenkins Pipeline
 
-```text
-Developer Pushes Code
-          │
-          ▼
-GitHub Repository
-          │
-          ▼
-Jenkins Checkout Stage
-          │
-          ▼
-Verify Tools
-          │
-          ▼
-ECR Login
-          │
-          ▼
-Build Docker Image
-          │
-          ▼
-Tag Image
-          │
-          ▼
-Push Image To ECR
-          │
-          ▼
-Update Kubernetes Manifest
-          │
-          ▼
-Deploy To Kubernetes
-          │
-          ▼
-Check Rollout Status
-          │
-          ▼
-Checkout Service Available in Kubernetes Cluster
+```groovy
+pipeline {
+    agent any
+
+    environment {
+
+        AWS_REGION = "us-east-1"
+
+        PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
+
+        IMAGE_NAME = "checkoutservice"
+        IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
+
+        K8S_DEPLOYMENT = "opentelemetry-demo-checkoutservice"
+        NAMESPACE = "default"
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                git branch: 'main',
+                    url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+            }
+        }
+
+        stage('Verify Tools') {
+            steps {
+                sh '''
+                aws --version
+                kubectl version --client
+                docker --version
+                '''
+            }
+        }
+
+        stage('Login Public ECR') {
+            steps {
+                sh '''
+                aws ecr-public get-login-password \
+                --region ${AWS_REGION} | \
+                docker login \
+                --username AWS \
+                --password-stdin public.ecr.aws
+                '''
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                sh '''
+                docker build \
+                -t ${IMAGE_NAME}:${IMAGE_TAG} \
+                -f src/checkout/Dockerfile .
+                '''
+            }
+        }
+
+        stage('Tag Image') {
+            steps {
+                sh '''
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Push Image To Public ECR') {
+            steps {
+                sh '''
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
+                '''
+            }
+        }
+
+        stage('Update Manifest') {
+            steps {
+                sh '''
+                sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
+                src/checkout/kubernetes/checkout/deploy.yaml
+
+                echo "Updated Image:"
+                grep -n "image:" \
+                src/checkout/kubernetes/checkout/deploy.yaml
+                '''
+            }
+        }
+
+        stage('Deploy To Kubernetes') {
+            steps {
+                sh '''
+                kubectl apply -f src/checkout/kubernetes/checkout/deploy.yaml
+                kubectl apply -f src/checkout/kubernetes/checkout/svc.yaml
+                '''
+            }
+        }
+
+        stage('Rollout Status') {
+            steps {
+                sh '''
+                kubectl rollout status \
+                deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
+                '''
+            }
+        }
+    }
+
+    post {
+
+        success {
+            echo "Checkout Service Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
+        }
+
+        failure {
+            echo "Checkout Service Pipeline Failed"
+        }
+
+        always {
+            sh '''
+            docker image prune -af || true
+            '''
+        }
+    }
+}
 ```
-
-## Outcome
-
-This pipeline provides a complete CI/CD workflow for the Checkout Service by automatically:
-
-* Building Docker images.
-* Storing images in Amazon ECR.
-* Updating Kubernetes manifests.
-* Deploying to Kubernetes.
-* Verifying successful rollout.
-* Cleaning up unused Docker images after execution.
-
-This ensures fast, consistent, and reliable deployments of the Checkout Service application.
