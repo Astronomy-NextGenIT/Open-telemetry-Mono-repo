@@ -1,97 +1,91 @@
-# Currency Service CI/CD Pipeline Documentation
+# Currency Service CI/CD Pipeline Documentation 
 
 ## Overview
 
-This Jenkins pipeline automates the complete CI/CD workflow for the Currency Service in the OpenTelemetry Demo application. The pipeline performs source code checkout, Docker image creation, Amazon ECR image management, Kubernetes deployment, and deployment verification.
+This Jenkins pipeline automates the complete CI/CD lifecycle for the **Currency Service** of the OpenTelemetry Demo application.
 
-### Objectives
+The pipeline performs the following tasks:
 
-* Fetch latest source code from GitHub.
-* Build Currency Service Docker image.
-* Push image to Amazon ECR.
-* Update Kubernetes deployment manifest with the latest image.
-* Deploy the Currency Service to Amazon EKS.
-* Verify successful rollout of the deployment.
-* Clean up unused Docker images after execution.
+1. Clones source code from GitHub.
+2. Verifies required tools on Jenkins.
+3. Authenticates with AWS Public ECR.
+4. Builds the Currency Service Docker image.
+5. Tags the image with build-specific and latest tags.
+6. Pushes the image to AWS Public ECR.
+7. Updates the Kubernetes deployment manifest.
+8. Deploys the application to Kubernetes.
+9. Verifies successful rollout.
+10. Cleans up unused Docker images.
 
 ---
 
-# Pipeline Architecture
+# Architecture Flow
 
 ```text
 GitHub Repository
-        │
-        ▼
-   Jenkins Pipeline
-        │
-        ▼
- Build Docker Image
-        │
-        ▼
- Push Image to ECR
-        │
-        ▼
- Update Kubernetes Manifest
-        │
-        ▼
- Deploy to EKS
-        │
-        ▼
- Verify Rollout
+       │
+       ▼
+    Jenkins
+       │
+       ├── Clone Source Code
+       │
+       ├── Build Docker Image
+       │
+       ├── Push Image
+       ▼
+ AWS Public ECR
+       │
+       ▼
+ Kubernetes Cluster
+       │
+       ▼
+ Currency Service Deployment
 ```
 
 ---
 
-# Environment Variables
-
-The pipeline defines several environment variables to avoid hardcoding values and improve maintainability.
-
-| Variable       | Description                             |
-| -------------- | --------------------------------------- |
-| AWS_REGION     | AWS Region where ECR and EKS are hosted |
-| AWS_ACCOUNT_ID | AWS Account Number                      |
-| ECR_REPO       | ECR Repository Name                     |
-| IMAGE_NAME     | Docker image name for Currency Service  |
-| IMAGE_TAG      | Build number used as image tag          |
-| ECR_URI        | Complete ECR repository URI             |
-| K8S_DEPLOYMENT | Kubernetes deployment name              |
-| NAMESPACE      | Kubernetes namespace                    |
-
-### Configuration
+# Pipeline Variables
 
 ```groovy
 environment {
-    AWS_REGION = "ap-south-1"
-    AWS_ACCOUNT_ID = "004058506543"
 
-    ECR_REPO = "open-telemetry-registry"
+    AWS_REGION = "us-east-1"
 
-    IMAGE_NAME = "currency"
-    IMAGE_TAG = "${BUILD_NUMBER}"
+    PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
 
-    ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+    IMAGE_NAME = "currencyservice"
+    IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
 
     K8S_DEPLOYMENT = "opentelemetry-demo-currencyservice"
     NAMESPACE = "default"
 }
 ```
 
+| Variable       | Purpose                     |
+| -------------- | --------------------------- |
+| AWS_REGION     | AWS Public ECR Region       |
+| PUBLIC_ECR_URI | Public ECR repository URI   |
+| IMAGE_NAME     | Currency Service image name |
+| IMAGE_TAG      | Unique build tag            |
+| K8S_DEPLOYMENT | Kubernetes deployment name  |
+| NAMESPACE      | Kubernetes namespace        |
+
 ---
-# Complete Pipeline
+
+# Complete Jenkins Pipeline
+
 ```groovy
 pipeline {
     agent any
 
     environment {
-        AWS_REGION = "ap-south-1"
-        AWS_ACCOUNT_ID = "004058506543"
 
-        ECR_REPO = "open-telemetry-registry"
+        AWS_REGION = "us-east-1"
 
-        IMAGE_NAME = "currency"
-        IMAGE_TAG = "${BUILD_NUMBER}"
+        PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
 
-        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+        IMAGE_NAME = "currencyservice"
+        IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
 
         K8S_DEPLOYMENT = "opentelemetry-demo-currencyservice"
         NAMESPACE = "default"
@@ -102,7 +96,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+                    url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
             }
         }
 
@@ -116,15 +110,14 @@ pipeline {
             }
         }
 
-        stage('ECR Login') {
+        stage('Login Public ECR') {
             steps {
                 sh '''
-                aws ecr get-login-password \
+                aws ecr-public get-login-password \
                 --region ${AWS_REGION} | \
                 docker login \
                 --username AWS \
-                --password-stdin \
-                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                --password-stdin public.ecr.aws
                 '''
             }
         }
@@ -144,15 +137,20 @@ pipeline {
                 sh '''
                 docker tag \
                 ${IMAGE_NAME}:${IMAGE_TAG} \
-                ${ECR_URI}:${IMAGE_TAG}
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
                 '''
             }
         }
 
-        stage('Push Image To ECR') {
+        stage('Push Image To Public ECR') {
             steps {
                 sh '''
-                docker push ${ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
                 '''
             }
         }
@@ -160,11 +158,12 @@ pipeline {
         stage('Update Manifest') {
             steps {
                 sh '''
-                sed -i "s|ghcr.io/open-telemetry/demo:1.12.0-currencyservice|${ECR_URI}:${IMAGE_TAG}|g" \
+                sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
                 src/currency/kubernetes/currency/deploy.yaml
 
                 echo "Updated Image:"
-                grep -n "image:" src/currency/kubernetes/currency/deploy.yaml
+                grep -n "image:" \
+                src/currency/kubernetes/currency/deploy.yaml
                 '''
             }
         }
@@ -181,7 +180,10 @@ pipeline {
         stage('Rollout Status') {
             steps {
                 sh '''
-                kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${NAMESPACE}
+                kubectl rollout status \
+                deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
                 '''
             }
         }
@@ -190,500 +192,332 @@ pipeline {
     post {
 
         success {
-            echo 'Currency Service Deployment Successful'
+            echo "Currency Service Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
         }
 
         failure {
-            echo 'Pipeline Failed'
+            echo "Currency Service Pipeline Failed"
         }
 
         always {
             sh '''
-            docker image prune -f || true
+            docker image prune -af || true
             '''
         }
     }
 }
-
 ```
-# Stage 1: Checkout Source Code
-
-## Purpose
-
-Downloads the latest source code from the GitHub repository.
-
-### Jenkins Stage
-
-```groovy
-stage('Checkout') {
-    steps {
-        git branch: 'main',
-        url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
-    }
-}
-```
-
-### What Happens
-
-1. Jenkins connects to GitHub.
-2. Pulls the latest code from the `main` branch.
-3. Stores the repository contents inside Jenkins workspace.
-
-### Benefits
-
-* Ensures latest application code is used.
-* Provides source files for Docker build and deployment.
 
 ---
 
-# Stage 2: Verify Required Tools
+# Stage-by-Stage Explanation
 
-## Purpose
-
-Verifies that all required tools are available on the Jenkins server before proceeding.
-
-### Jenkins Stage
+## Stage 1: Checkout Source Code
 
 ```groovy
-stage('Verify Tools') {
-    steps {
-        sh '''
-        aws --version
-        kubectl version --client
-        docker --version
-        '''
-    }
-}
+stage('Checkout')
 ```
 
-### Tools Verified
-
-| Tool    | Purpose                           |
-| ------- | --------------------------------- |
-| AWS CLI | Access AWS services               |
-| kubectl | Deploy resources to Kubernetes    |
-| Docker  | Build and manage container images |
-
-### Expected Output
+Clones the latest source code from GitHub.
 
 ```bash
-aws-cli/2.x.x
-Client Version: v1.xx.x
-Docker version xx.x.x
+git clone
 ```
 
-### Benefits
+Repository:
 
-* Prevents failures later in the pipeline.
-* Validates Jenkins agent readiness.
+```text
+https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git
+```
+
+Branch:
+
+```text
+main
+```
 
 ---
 
-# Stage 3: Authenticate with Amazon ECR
-
-## Purpose
-
-Logs Jenkins into Amazon Elastic Container Registry (ECR).
-
-### Jenkins Stage
+## Stage 2: Verify Tools
 
 ```groovy
-stage('ECR Login') {
-    steps {
-        sh '''
-        aws ecr get-login-password \
-        --region ${AWS_REGION} | \
-        docker login \
-        --username AWS \
-        --password-stdin \
-        ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
-        '''
-    }
-}
+stage('Verify Tools')
 ```
 
-### What Happens
+Checks availability of:
 
-1. AWS CLI generates a temporary authentication token.
-2. Token is passed securely to Docker.
-3. Docker authenticates with Amazon ECR.
+```bash
+aws --version
+kubectl version --client
+docker --version
+```
 
-### Benefits
+Purpose:
 
-* Allows image push operations.
-* Avoids storing credentials in plaintext.
+* Ensure Jenkins node is properly configured.
+* Prevent failures later in the pipeline.
 
 ---
 
-# Stage 4: Build Docker Image
-
-## Purpose
-
-Builds a Docker image for the Currency Service.
-
-### Jenkins Stage
+## Stage 3: Login to AWS Public ECR
 
 ```groovy
-stage('Build Docker Image') {
-    steps {
-        sh '''
-        docker build \
-        -t ${IMAGE_NAME}:${IMAGE_TAG} \
-        -f src/currency/Dockerfile .
-        '''
-    }
-}
+stage('Login Public ECR')
 ```
 
-### Docker Build Command
+Authenticates Docker with AWS Public ECR.
+
+```bash
+aws ecr-public get-login-password
+```
+
+Docker login:
+
+```bash
+docker login public.ecr.aws
+```
+
+Purpose:
+
+* Allow image push operations.
+
+---
+
+## Stage 4: Build Docker Image
+
+```groovy
+stage('Build Docker Image')
+```
+
+Builds Currency Service image.
+
+Dockerfile:
+
+```text
+src/currency/Dockerfile
+```
+
+Build command:
 
 ```bash
 docker build \
--t currency:<BUILD_NUMBER> \
+-t currencyservice:currencyservice-${BUILD_NUMBER} \
 -f src/currency/Dockerfile .
 ```
 
-### Example
-
-If Build Number = 25
+Example:
 
 ```bash
-currency:25
+currencyservice:currencyservice-12
 ```
-
-### What Happens
-
-1. Docker reads the Currency Service Dockerfile.
-2. Application dependencies are installed.
-3. Application is packaged into a container image.
-
-### Benefits
-
-* Creates a portable application package.
-* Ensures consistency across environments.
 
 ---
 
-# Stage 5: Tag Docker Image
-
-## Purpose
-
-Creates an ECR-compatible tag for the newly built image.
-
-### Jenkins Stage
+## Stage 5: Tag Docker Image
 
 ```groovy
-stage('Tag Image') {
-    steps {
-        sh '''
-        docker tag \
-        ${IMAGE_NAME}:${IMAGE_TAG} \
-        ${ECR_URI}:${IMAGE_TAG}
-        '''
-    }
-}
+stage('Tag Image')
 ```
 
-### Example
+Creates two tags.
 
-Source Image:
+### Versioned Tag
 
 ```bash
-currency:25
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:currencyservice-12
 ```
 
-Target Image:
+### Latest Tag
 
 ```bash
-004058506543.dkr.ecr.ap-south-1.amazonaws.com/open-telemetry-registry:25
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:currencyservice-latest
 ```
 
-### Benefits
+Benefits:
 
-* Prepares image for ECR upload.
-* Maintains version tracking using build numbers.
+* Rollback support.
+* Latest deployment support.
 
 ---
 
-# Stage 6: Push Docker Image to Amazon ECR
-
-## Purpose
-
-Uploads the image to Amazon Elastic Container Registry.
-
-### Jenkins Stage
+## Stage 6: Push Image to Public ECR
 
 ```groovy
-stage('Push Image To ECR') {
-    steps {
-        sh '''
-        docker push ${ECR_URI}:${IMAGE_TAG}
-        '''
-    }
-}
+stage('Push Image To Public ECR')
 ```
 
-### Example
+Pushes both tags.
 
 ```bash
-docker push 004058506543.dkr.ecr.ap-south-1.amazonaws.com/open-telemetry-registry:25
+docker push currencyservice-12
+docker push currencyservice-latest
 ```
 
-### What Happens
+Result:
 
-1. Docker layers are uploaded to ECR.
-2. Image becomes available for Kubernetes deployment.
+```text
+public.ecr.aws/q2a1e2p7/open-telemetry-demo
+```
 
-### Benefits
+contains:
 
-* Centralized image repository.
-* Secure storage of application images.
+```text
+currencyservice-12
+currencyservice-latest
+```
 
 ---
 
-# Stage 7: Update Kubernetes Deployment Manifest
-
-## Purpose
-
-Updates the Kubernetes deployment file with the latest Docker image.
-
-### Jenkins Stage
+## Stage 7: Update Kubernetes Manifest
 
 ```groovy
-stage('Update Manifest') {
-    steps {
-        sh '''
-        sed -i "s|ghcr.io/open-telemetry/demo:1.12.0-currencyservice|${ECR_URI}:${IMAGE_TAG}|g" \
-        src/currency/kubernetes/currency/deploy.yaml
-
-        echo "Updated Image:"
-        grep -n "image:" src/currency/kubernetes/currency/deploy.yaml
-        '''
-    }
-}
+stage('Update Manifest')
 ```
 
-### Before Update
+Replaces image reference inside deployment manifest.
+
+Before:
 
 ```yaml
 image: ghcr.io/open-telemetry/demo:1.12.0-currencyservice
 ```
 
-### After Update
+After:
 
 ```yaml
-image: 004058506543.dkr.ecr.ap-south-1.amazonaws.com/open-telemetry-registry:25
+image: public.ecr.aws/q2a1e2p7/open-telemetry-demo:currencyservice-12
 ```
 
-### What Happens
+Command:
 
-* `sed` replaces the default image reference.
-* Deployment manifest now points to the newly built image.
-* `grep` verifies the update.
+```bash
+sed -i
+```
 
-### Benefits
+Verification:
 
-* Automatically deploys latest version.
-* Eliminates manual manifest edits.
+```bash
+grep image:
+```
 
 ---
 
-# Stage 8: Deploy Currency Service to Kubernetes
-
-## Purpose
-
-Applies Kubernetes resources to EKS cluster.
-
-### Jenkins Stage
+## Stage 8: Deploy to Kubernetes
 
 ```groovy
-stage('Deploy To Kubernetes') {
-    steps {
-        sh '''
-        kubectl apply -f src/currency/kubernetes/currency/deploy.yaml
-        kubectl apply -f src/currency/kubernetes/currency/svc.yaml
-        '''
-    }
-}
+stage('Deploy To Kubernetes')
 ```
 
-### Resources Applied
+Applies Kubernetes manifests.
 
-#### Deployment
+Deployment:
 
-```yaml
-deploy.yaml
+```bash
+kubectl apply -f deploy.yaml
 ```
 
-Responsible for:
+Service:
 
-* Pod creation
-* Replica management
-* Rolling updates
-
-#### Service
-
-```yaml
-svc.yaml
+```bash
+kubectl apply -f svc.yaml
 ```
 
-Responsible for:
+Files:
 
-* Internal networking
-* Service discovery
-* Pod communication
-
-### Benefits
-
-* Deploys latest application version.
-* Maintains desired state automatically.
+```text
+src/currency/kubernetes/currency/deploy.yaml
+src/currency/kubernetes/currency/svc.yaml
+```
 
 ---
 
-# Stage 9: Verify Deployment Rollout
-
-## Purpose
-
-Ensures the deployment has completed successfully.
-
-### Jenkins Stage
+## Stage 9: Verify Rollout
 
 ```groovy
-stage('Rollout Status') {
-    steps {
-        sh '''
-        kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${NAMESPACE}
-        '''
-    }
-}
+stage('Rollout Status')
 ```
 
-### Executed Command
+Monitors deployment progress.
+
+Command:
 
 ```bash
-kubectl rollout status deployment/opentelemetry-demo-currencyservice -n default
+kubectl rollout status deployment/opentelemetry-demo-currencyservice
 ```
 
-### Successful Output
+Timeout:
 
 ```bash
-deployment "opentelemetry-demo-currencyservice" successfully rolled out
+300 seconds
 ```
 
-### What Happens
+Successful output:
 
-Kubernetes checks:
-
-* New pods are created.
-* Containers start successfully.
-* Readiness probes pass.
-* Old pods are terminated.
-
-### Benefits
-
-* Prevents unnoticed deployment failures.
-* Validates application availability.
+```text
+deployment successfully rolled out
+```
 
 ---
 
 # Post Build Actions
 
-## Success Block
+## Success
 
 ```groovy
 success {
-    echo 'Currency Service Deployment Successful'
+    echo "Currency Service Deployment Successful"
 }
 ```
 
-### Output
+Output:
 
-```bash
+```text
 Currency Service Deployment Successful
+Image Pushed:
+public.ecr.aws/q2a1e2p7/open-telemetry-demo:currencyservice-<build-number>
 ```
 
 ---
 
-## Failure Block
+## Failure
 
 ```groovy
 failure {
-    echo 'Pipeline Failed'
+    echo "Currency Service Pipeline Failed"
 }
 ```
 
-### Output
-
-```bash
-Pipeline Failed
-```
+Displays failure message for troubleshooting.
 
 ---
 
-## Cleanup Block
+## Cleanup
 
 ```groovy
 always {
-    sh '''
-    docker image prune -f || true
-    '''
+    docker image prune -af
 }
 ```
 
-### Purpose
+Removes unused Docker images from Jenkins node.
 
-Removes unused Docker images from Jenkins server.
+Benefits:
 
-### Benefits
-
-* Prevents disk space exhaustion.
-* Keeps Jenkins node clean.
-* Reduces maintenance overhead.
+* Saves disk space.
+* Prevents Jenkins node storage exhaustion.
 
 ---
 
-# Complete Deployment Flow
+# Expected Outcome
 
-```text
-1. Checkout latest code from GitHub
-            │
-            ▼
-2. Verify AWS CLI, Docker and kubectl
-            │
-            ▼
-3. Login to Amazon ECR
-            │
-            ▼
-4. Build Currency Service Docker Image
-            │
-            ▼
-5. Tag Image for ECR
-            │
-            ▼
-6. Push Image to Amazon ECR
-            │
-            ▼
-7. Update Kubernetes Manifest
-            │
-            ▼
-8. Deploy Deployment and Service
-            │
-            ▼
-9. Verify Rollout Status
-            │
-            ▼
-10. Cleanup Old Docker Images
-```
+After successful pipeline execution:
 
-# Outcome
+Currency Service image built successfully
+Image pushed to AWS Public ECR
+Kubernetes deployment updated
+New Currency Service pod created
+Rollout completed successfully
+Application available inside the OpenTelemetry Demo environment
 
-After successful execution:
-
-* Currency Service source code is fetched from GitHub.
-* Docker image is built and versioned using Jenkins build number.
-* Image is pushed to Amazon ECR.
-* Kubernetes deployment manifest is automatically updated.
-* Latest Currency Service version is deployed to Amazon EKS.
-* Rollout status is validated.
-* Jenkins workspace remains clean through automatic Docker image cleanup.
-
+✅ Jenkins workspace cleaned automatically after build completion
