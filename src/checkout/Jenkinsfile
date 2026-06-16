@@ -2,15 +2,13 @@ pipeline {
     agent any
 
     environment {
-        AWS_REGION = "ap-south-1"
-        AWS_ACCOUNT_ID = "004058506543"
 
-        ECR_REPO = "open-telemetry-registry"
+        AWS_REGION = "us-east-1"
 
-        IMAGE_NAME = "checkout"
-        IMAGE_TAG = "${BUILD_NUMBER}"
+        PUBLIC_ECR_URI = "public.ecr.aws/q2a1e2p7/open-telemetry-demo"
 
-        ECR_URI = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPO}"
+        IMAGE_NAME = "checkoutservice"
+        IMAGE_TAG = "${IMAGE_NAME}-${BUILD_NUMBER}"
 
         K8S_DEPLOYMENT = "opentelemetry-demo-checkoutservice"
         NAMESPACE = "default"
@@ -21,7 +19,7 @@ pipeline {
         stage('Checkout') {
             steps {
                 git branch: 'main',
-                url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
+                    url: 'https://github.com/Astronomy-NextGenIT/Open-telemetry-Mono-repo.git'
             }
         }
 
@@ -35,15 +33,14 @@ pipeline {
             }
         }
 
-        stage('ECR Login') {
+        stage('Login Public ECR') {
             steps {
                 sh '''
-                aws ecr get-login-password \
+                aws ecr-public get-login-password \
                 --region ${AWS_REGION} | \
                 docker login \
                 --username AWS \
-                --password-stdin \
-                ${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com
+                --password-stdin public.ecr.aws
                 '''
             }
         }
@@ -63,15 +60,20 @@ pipeline {
                 sh '''
                 docker tag \
                 ${IMAGE_NAME}:${IMAGE_TAG} \
-                ${ECR_URI}:${IMAGE_TAG}
+                ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+
+                docker tag \
+                ${IMAGE_NAME}:${IMAGE_TAG} \
+                ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
                 '''
             }
         }
 
-        stage('Push Image To ECR') {
+        stage('Push Image To Public ECR') {
             steps {
                 sh '''
-                docker push ${ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_TAG}
+                docker push ${PUBLIC_ECR_URI}:${IMAGE_NAME}-latest
                 '''
             }
         }
@@ -79,11 +81,12 @@ pipeline {
         stage('Update Manifest') {
             steps {
                 sh '''
-                sed -i "s|ghcr.io/open-telemetry/demo:1.12.0-checkoutservice|${ECR_URI}:${IMAGE_TAG}|g" \
+                sed -i "s|image:.*|image: ${PUBLIC_ECR_URI}:${IMAGE_TAG}|g" \
                 src/checkout/kubernetes/checkout/deploy.yaml
 
                 echo "Updated Image:"
-                grep -n "image:" src/checkout/kubernetes/checkout/deploy.yaml
+                grep -n "image:" \
+                src/checkout/kubernetes/checkout/deploy.yaml
                 '''
             }
         }
@@ -100,7 +103,10 @@ pipeline {
         stage('Rollout Status') {
             steps {
                 sh '''
-                kubectl rollout status deployment/${K8S_DEPLOYMENT} -n ${NAMESPACE}
+                kubectl rollout status \
+                deployment/${K8S_DEPLOYMENT} \
+                -n ${NAMESPACE} \
+                --timeout=300s
                 '''
             }
         }
@@ -109,16 +115,17 @@ pipeline {
     post {
 
         success {
-            echo 'Checkout Service Deployment Successful'
+            echo "Checkout Service Deployment Successful"
+            echo "Image Pushed: ${PUBLIC_ECR_URI}:${IMAGE_TAG}"
         }
 
         failure {
-            echo 'Pipeline Failed'
+            echo "Checkout Service Pipeline Failed"
         }
 
         always {
             sh '''
-            docker image prune -f || true
+            docker image prune -af || true
             '''
         }
     }
