@@ -22,6 +22,6 @@ WORKDIR /usr/src/app/
 
 COPY --from=builder /usr/src/app/product-catalog/ ./
 
-EXPOSE ${PRODUCT_CATALOG_PORT}
+EXPOSE 8080
 ENTRYPOINT [ "./product-catalog" ]
 
