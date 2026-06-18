@@ -47,12 +47,14 @@ spec:
               value: 'opentelemetry-demo-otelcol'
             - name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
               value: cumulative
-            - name: PRODUCT_CATALOG_SERVICE_PORT
+            - name: PRODUCT_CATALOG_PORT
               value: "8080"
             - name: FLAGD_HOST
               value: 'opentelemetry-demo-flagd'
             - name: FLAGD_PORT
               value: "8013"
+            - name: DB_CONNECTION_STRING
+              value: postgres://astronomy_user:astronomy_password@postgresql:5432/astronomy_db?sslmode=disable
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://$(OTEL_COLLECTOR_NAME):4317
             - name: OTEL_RESOURCE_ATTRIBUTES
